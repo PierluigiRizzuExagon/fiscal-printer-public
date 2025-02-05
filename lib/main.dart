@@ -24,6 +24,10 @@ void main() {
   } else if (Platform.isIOS) {
     WebViewPlatform.instance = WebKitWebViewPlatform();
     _log('Initialized iOS WebView');
+  } else if (Platform.isWindows) {
+    // Su Windows usiamo comunque WebView
+    WebViewPlatform.instance = AndroidWebViewPlatform();
+    _log('Initialized Windows WebView');
   }
 
   runApp(const MyApp());
@@ -64,9 +68,7 @@ class _InputPageState extends State<InputPage> {
   @override
   void initState() {
     super.initState();
-    if (Platform.isAndroid || Platform.isIOS) {
-      _initializeWebView();
-    }
+    _initializeWebView();
   }
 
   void _initializeWebView() {
@@ -80,7 +82,8 @@ class _InputPageState extends State<InputPage> {
         mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
       );
     } else {
-      return; // Non inizializzare su altre piattaforme
+      // Per Windows e altre piattaforme
+      params = const PlatformWebViewControllerCreationParams();
     }
 
     final controller = WebViewController.fromPlatformCreationParams(params)
@@ -89,7 +92,7 @@ class _InputPageState extends State<InputPage> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onWebResourceError: (WebResourceError error) {
-            debugPrint('Web resource error: ${error.description}');
+            _log('Web resource error: ${error.description}');
           },
         ),
       )
@@ -102,6 +105,7 @@ class _InputPageState extends State<InputPage> {
     }
 
     _webViewController = controller;
+    _log('WebView initialized for ${Platform.operatingSystem}');
   }
 
   void _disconnectSocket() {
@@ -124,36 +128,10 @@ class _InputPageState extends State<InputPage> {
     setState(() => _printerStatus = 'Sending print request...');
 
     try {
-      if (Platform.isAndroid || Platform.isIOS) {
-        _log('Using WebView to trigger print');
-        await _webViewController?.runJavaScript('triggerPrint()');
-      } else {
-        _log('Using direct HTTP request for desktop');
-        // Invia richiesta HTTP diretta per desktop
-        final response = await http.post(
-          Uri.parse('http://192.168.0.99/service.cgi'),
-          headers: {'Content-Type': 'application/xml'},
-          body: '''<?xml version="1.0" encoding="UTF-8"?>
-                <Service>
-                  <cmd>=K</cmd>
-                  <cmd>=C1</cmd>
-                  <cmd>=C2</cmd>
-                  <cmd>=C10</cmd>
-                  <cmd>=C1</cmd>
-                </Service>''',
-        );
-
-        _log('HTTP Response: ${response.statusCode} - ${response.body}');
-
-        if (response.statusCode != 200) {
-          throw Exception(
-              'HTTP request failed with status: ${response.statusCode}');
-        }
-      }
+      await _webViewController?.runJavaScript('triggerPrint()');
+      _log('JavaScript triggerPrint() called');
 
       setState(() => _printerStatus = 'Print request sent successfully');
-      _log('Print request completed successfully');
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -274,17 +252,17 @@ class _InputPageState extends State<InputPage> {
       ),
       body: Stack(
         children: [
-          if (Platform.isAndroid || Platform.isIOS)
-            Opacity(
-              opacity: 0,
-              child: SizedBox(
-                height: 1,
-                width: 1,
-                child: _webViewController != null
-                    ? WebViewWidget(controller: _webViewController!)
-                    : const SizedBox(),
-              ),
+          // WebView nascosta ma sempre presente
+          Opacity(
+            opacity: 0,
+            child: SizedBox(
+              height: 1,
+              width: 1,
+              child: _webViewController != null
+                  ? WebViewWidget(controller: _webViewController!)
+                  : const SizedBox(),
             ),
+          ),
           // UI principale
           Column(
             children: [
