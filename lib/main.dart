@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-// Importazioni platform-specific
-import 'package:webview_flutter_android/webview_flutter_android.dart';
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+import 'package:macos_webview_kit/macos_webview_kit.dart';
 import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
+  if (Platform.isMacOS) {
+    MacosWebviewKit().openWebView(urlString: 'assets/index.html');
+  }
+
   runApp(const MyApp());
 }
 
@@ -38,9 +42,9 @@ class _InputPageState extends State<InputPage> {
   final TextEditingController _circuitIdController = TextEditingController();
   final TextEditingController _posIdsController = TextEditingController();
   IO.Socket? _socket;
-  WebViewController? _webViewController;
   bool _isConnected = false;
   String _currentSubscription = '';
+  bool _webViewInitialized = false;
 
   @override
   void initState() {
@@ -49,45 +53,10 @@ class _InputPageState extends State<InputPage> {
   }
 
   void _initializeWebView() {
-    late final PlatformWebViewControllerCreationParams params;
-
-    if (WebViewPlatform.instance is WebKitWebViewPlatform) {
-      params = WebKitWebViewControllerCreationParams(
-        allowsInlineMediaPlayback: true,
-        mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
-      );
-    } else if (WebViewPlatform.instance is AndroidWebViewPlatform) {
-      params = AndroidWebViewControllerCreationParams();
-    } else {
-      params = const PlatformWebViewControllerCreationParams();
+    if (Platform.isMacOS && !_webViewInitialized) {
+      MacosWebviewKit().openWebView(urlString: 'assets/index.html');
+      setState(() => _webViewInitialized = true);
     }
-
-    final WebViewController controller =
-        WebViewController.fromPlatformCreationParams(params);
-
-    controller
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0x00000000))
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onWebResourceError: (WebResourceError error) {
-            debugPrint('Web resource error: ${error.description}');
-          },
-        ),
-      )
-      ..loadFlutterAsset('assets/index.html');
-
-    // Platform-specific settings
-    if (controller.platform is AndroidWebViewController) {
-      AndroidWebViewController.enableDebugging(true);
-      (controller.platform as AndroidWebViewController)
-          .setMediaPlaybackRequiresUserGesture(false);
-    } else if (controller.platform is WebKitWebViewController) {
-      (controller.platform as WebKitWebViewController)
-          .setAllowsBackForwardNavigationGestures(true);
-    }
-
-    _webViewController = controller;
   }
 
   void _disconnectSocket() {
@@ -95,6 +64,9 @@ class _InputPageState extends State<InputPage> {
       _socket!.disconnect();
       _socket!.dispose();
       _socket = null;
+      if (Platform.isMacOS) {
+        MacosWebviewKit().closeWebView();
+      }
       setState(() {
         _isConnected = false;
         _currentSubscription = '';
@@ -146,7 +118,10 @@ class _InputPageState extends State<InputPage> {
     _socket!.on('raise-printer', (_) async {
       debugPrint('Printer raised at: ${DateTime.now()}');
       try {
-        await _webViewController?.runJavaScript('triggerPrint()');
+        if (Platform.isMacOS) {
+          // Ricarica la pagina per triggerare la stampa
+          MacosWebviewKit().openWebView(urlString: 'assets/index.html');
+        }
         debugPrint('Print command sent successfully');
 
         if (mounted) {
@@ -156,7 +131,9 @@ class _InputPageState extends State<InputPage> {
                 children: [
                   Icon(Icons.print, color: Colors.white),
                   SizedBox(width: 8),
-                  Text('Print command sent to printer'),
+                  Flexible(
+                    child: Text('Print command sent to printer'),
+                  ),
                 ],
               ),
               backgroundColor: Colors.green,
@@ -173,7 +150,9 @@ class _InputPageState extends State<InputPage> {
                 children: [
                   const Icon(Icons.error_outline, color: Colors.white),
                   const SizedBox(width: 8),
-                  Text('Error sending print command: $error'),
+                  Flexible(
+                    child: Text('Error sending print command: $error'),
+                  ),
                 ],
               ),
               backgroundColor: Colors.red,
@@ -206,6 +185,9 @@ class _InputPageState extends State<InputPage> {
     _socket?.dispose();
     _circuitIdController.dispose();
     _posIdsController.dispose();
+    if (Platform.isMacOS) {
+      MacosWebviewKit().closeWebView();
+    }
     super.dispose();
   }
 
@@ -365,7 +347,14 @@ class _InputPageState extends State<InputPage> {
                 border: Border.all(color: Colors.grey[300]!),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: WebViewWidget(controller: _webViewController!),
+              child: Platform.isMacOS
+                  ? const SizedBox()
+                  : const Center(
+                      child: Text(
+                        'WebView not available on this platform',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
             ),
           ),
           const SizedBox(height: 16),
