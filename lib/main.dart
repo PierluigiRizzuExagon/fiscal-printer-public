@@ -1,11 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'dart:developer' as developer;
+
+// Funzione di log personalizzata
+void _log(String message) {
+  developer.log(message, name: 'PrinterApp');
+  debugPrint('PrinterApp: $message');
+}
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Inizializza la piattaforma WebView appropriata
+  if (Platform.isAndroid) {
+    WebViewPlatform.instance = AndroidWebViewPlatform();
+    _log('Initialized Android WebView');
+  } else if (Platform.isIOS) {
+    WebViewPlatform.instance = WebKitWebViewPlatform();
+    _log('Initialized iOS WebView');
+  }
+
   runApp(const MyApp());
 }
 
@@ -44,11 +64,26 @@ class _InputPageState extends State<InputPage> {
   @override
   void initState() {
     super.initState();
-    _initializeWebView();
+    if (Platform.isAndroid || Platform.isIOS) {
+      _initializeWebView();
+    }
   }
 
   void _initializeWebView() {
-    final controller = WebViewController()
+    late final PlatformWebViewControllerCreationParams params;
+
+    if (Platform.isAndroid) {
+      params = const PlatformWebViewControllerCreationParams();
+    } else if (Platform.isIOS) {
+      params = WebKitWebViewControllerCreationParams(
+        allowsInlineMediaPlayback: true,
+        mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
+      );
+    } else {
+      return; // Non inizializzare su altre piattaforme
+    }
+
+    final controller = WebViewController.fromPlatformCreationParams(params)
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(const Color(0x00000000))
       ..setNavigationDelegate(
@@ -59,6 +94,12 @@ class _InputPageState extends State<InputPage> {
         ),
       )
       ..loadFlutterAsset('assets/index.html');
+
+    if (Platform.isAndroid) {
+      AndroidWebViewController.enableDebugging(true);
+      (controller.platform as AndroidWebViewController)
+          .setMediaPlaybackRequiresUserGesture(false);
+    }
 
     _webViewController = controller;
   }
@@ -79,10 +120,40 @@ class _InputPageState extends State<InputPage> {
   }
 
   Future<void> _triggerPrint() async {
+    _log('Triggering print request...');
     setState(() => _printerStatus = 'Sending print request...');
+
     try {
-      await _webViewController?.runJavaScript('triggerPrint()');
+      if (Platform.isAndroid || Platform.isIOS) {
+        _log('Using WebView to trigger print');
+        await _webViewController?.runJavaScript('triggerPrint()');
+      } else {
+        _log('Using direct HTTP request for desktop');
+        // Invia richiesta HTTP diretta per desktop
+        final response = await http.post(
+          Uri.parse('http://192.168.0.99/service.cgi'),
+          headers: {'Content-Type': 'application/xml'},
+          body: '''<?xml version="1.0" encoding="UTF-8"?>
+                <Service>
+                  <cmd>=K</cmd>
+                  <cmd>=C1</cmd>
+                  <cmd>=C2</cmd>
+                  <cmd>=C10</cmd>
+                  <cmd>=C1</cmd>
+                </Service>''',
+        );
+
+        _log('HTTP Response: ${response.statusCode} - ${response.body}');
+
+        if (response.statusCode != 200) {
+          throw Exception(
+              'HTTP request failed with status: ${response.statusCode}');
+        }
+      }
+
       setState(() => _printerStatus = 'Print request sent successfully');
+      _log('Print request completed successfully');
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -98,6 +169,7 @@ class _InputPageState extends State<InputPage> {
         );
       }
     } catch (error) {
+      _log('Error during print request: $error');
       setState(() => _printerStatus = 'Error: $error');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -115,7 +187,6 @@ class _InputPageState extends State<InputPage> {
       }
     }
 
-    // Reset status after 3 seconds
     await Future.delayed(const Duration(seconds: 3));
     if (mounted) {
       setState(() => _printerStatus = 'Ready');
@@ -134,6 +205,8 @@ class _InputPageState extends State<InputPage> {
       return;
     }
 
+    _log('Connecting to socket with Circuit ID: $circuitId, POS IDs: $posIds');
+
     _socket = IO.io(
         'ws://fp-socket.exagonplus.com',
         IO.OptionBuilder()
@@ -142,7 +215,7 @@ class _InputPageState extends State<InputPage> {
             .build());
 
     _socket!.onConnect((_) {
-      debugPrint('Socket connected');
+      _log('Socket connected successfully');
       setState(() {
         _isConnected = true;
         _currentSubscription =
@@ -154,6 +227,7 @@ class _InputPageState extends State<InputPage> {
         'circuitId': circuitId,
         'posIds': posIds,
       });
+      _log('Emitted register event');
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Connected and registered successfully')),
@@ -161,17 +235,17 @@ class _InputPageState extends State<InputPage> {
     });
 
     _socket!.on('raise-printer', (_) async {
-      debugPrint('Printer raised at: ${DateTime.now()}');
+      _log('Received raise-printer event');
       await _triggerPrint();
     });
 
     _socket!.onDisconnect((_) {
-      debugPrint('Socket disconnected');
+      _log('Socket disconnected');
       setState(() => _isConnected = false);
     });
 
     _socket!.onError((error) {
-      debugPrint('Socket error: $error');
+      _log('Socket error: $error');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Socket error: $error')),
       );
@@ -179,6 +253,7 @@ class _InputPageState extends State<InputPage> {
     });
 
     _socket!.connect();
+    _log('Initiated socket connection');
   }
 
   @override
@@ -199,15 +274,17 @@ class _InputPageState extends State<InputPage> {
       ),
       body: Stack(
         children: [
-          // WebView nascosta
-          Opacity(
-            opacity: 0,
-            child: SizedBox(
-              height: 1,
-              width: 1,
-              child: WebViewWidget(controller: _webViewController!),
+          if (Platform.isAndroid || Platform.isIOS)
+            Opacity(
+              opacity: 0,
+              child: SizedBox(
+                height: 1,
+                width: 1,
+                child: _webViewController != null
+                    ? WebViewWidget(controller: _webViewController!)
+                    : const SizedBox(),
+              ),
             ),
-          ),
           // UI principale
           Column(
             children: [
