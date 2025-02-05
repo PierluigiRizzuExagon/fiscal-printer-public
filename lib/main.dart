@@ -1,17 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'package:macos_webview_kit/macos_webview_kit.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
-import 'package:flutter/rendering.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  if (Platform.isMacOS) {
-    MacosWebviewKit().openWebView(urlString: 'assets/index.html');
-  }
-
   runApp(const MyApp());
 }
 
@@ -42,9 +37,9 @@ class _InputPageState extends State<InputPage> {
   final TextEditingController _circuitIdController = TextEditingController();
   final TextEditingController _posIdsController = TextEditingController();
   IO.Socket? _socket;
+  WebViewController? _webViewController;
   bool _isConnected = false;
   String _currentSubscription = '';
-  bool _webViewInitialized = false;
 
   @override
   void initState() {
@@ -53,10 +48,19 @@ class _InputPageState extends State<InputPage> {
   }
 
   void _initializeWebView() {
-    if (Platform.isMacOS && !_webViewInitialized) {
-      MacosWebviewKit().openWebView(urlString: 'assets/index.html');
-      setState(() => _webViewInitialized = true);
-    }
+    final controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(const Color(0x00000000))
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onWebResourceError: (WebResourceError error) {
+            debugPrint('Web resource error: ${error.description}');
+          },
+        ),
+      )
+      ..loadFlutterAsset('assets/index.html');
+
+    _webViewController = controller;
   }
 
   void _disconnectSocket() {
@@ -64,9 +68,6 @@ class _InputPageState extends State<InputPage> {
       _socket!.disconnect();
       _socket!.dispose();
       _socket = null;
-      if (Platform.isMacOS) {
-        MacosWebviewKit().closeWebView();
-      }
       setState(() {
         _isConnected = false;
         _currentSubscription = '';
@@ -118,10 +119,7 @@ class _InputPageState extends State<InputPage> {
     _socket!.on('raise-printer', (_) async {
       debugPrint('Printer raised at: ${DateTime.now()}');
       try {
-        if (Platform.isMacOS) {
-          // Ricarica la pagina per triggerare la stampa
-          MacosWebviewKit().openWebView(urlString: 'assets/index.html');
-        }
+        await _webViewController?.runJavaScript('triggerPrint()');
         debugPrint('Print command sent successfully');
 
         if (mounted) {
@@ -185,9 +183,6 @@ class _InputPageState extends State<InputPage> {
     _socket?.dispose();
     _circuitIdController.dispose();
     _posIdsController.dispose();
-    if (Platform.isMacOS) {
-      MacosWebviewKit().closeWebView();
-    }
     super.dispose();
   }
 
@@ -347,14 +342,7 @@ class _InputPageState extends State<InputPage> {
                 border: Border.all(color: Colors.grey[300]!),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Platform.isMacOS
-                  ? const SizedBox()
-                  : const Center(
-                      child: Text(
-                        'WebView not available on this platform',
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    ),
+              child: WebViewWidget(controller: _webViewController!),
             ),
           ),
           const SizedBox(height: 16),
